@@ -4,6 +4,8 @@ use thiserror::Error;
 pub enum WsError {
     #[error("client handshake error")]
     ClientHandshakeError,
+    #[error("server handshake error")]
+    ServerHandshakeError,
     #[error("socket error")]
     SocketError(#[from] io::Error),
     #[error("allocator error")]

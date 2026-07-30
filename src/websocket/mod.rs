@@ -1,44 +1,70 @@
+pub mod common;
 pub mod error;
 pub mod frame;
 pub mod message;
 pub mod opcode;
-pub mod common;
 
+use common::{compute_sec_websocket_accept, parse_sec_ws_key};
 use error::{Result, WsError};
 use frame::Frame;
 use message::{Message, MessageKind};
 use opcode::Opcode;
-use common::compute_sec_websocket_accept;
 use rand;
 use std::fmt::Write;
 use std::io::{self, Read};
+use std::str;
 
-pub struct WebSocket<S> {
+pub struct WebSocket<S, const CHUNK_SIZE: usize> {
     socket: S,
 }
 
-impl<S: Read + io::Write> WebSocket<S> {
+impl<S: Read + io::Write, const CHUCK_SIZE: usize> WebSocket<S, CHUCK_SIZE> {
     pub fn new(socket: S) -> Self {
         WebSocket { socket }
+    }
+    pub fn server_handshake(&mut self) -> Result<()> {
+        let mut buffer = [0u8; 1024];
+        let buf_size = self.socket.read(&mut buffer).unwrap(); // TODO: work with server io errors
+        let request = str::from_utf8(&buffer[0..buf_size]).unwrap(); // TODO: handle utf8 errors (it shouldn't happen in handshake)
+        let sec_ws_key = parse_sec_ws_key(request)?;
+        let mut handshake = String::with_capacity(1024);
+        handshake.push_str("HTTP/1.1 101 Switching Protocols\r\n");
+        handshake.push_str("Upgrade: websocket\r\n");
+        handshake.push_str("Connection: Upgrade\r\n");
+        write!(
+            &mut handshake,
+            "Sec-WebSocket-Accept: {}\r\n",
+            compute_sec_websocket_accept(sec_ws_key)
+        )
+        .map_err(|_| {
+            eprintln!("Write key to handshake failed");
+            WsError::ServerHandshakeError
+        })?;
+        handshake.push_str("\r\n");
+        self.socket.write(handshake.as_bytes()).map_err(|_| {
+            eprintln!("Server write handshake to socket failed");
+            WsError::ServerHandshakeError
+        })?;
+        Ok(())
     }
     pub fn client_handshake(&mut self, host: String) -> Result<()> {
         let mut handshake = String::with_capacity(1024);
         handshake.push_str("GET / HTTP/1.1\r\n");
-        write!(&mut handshake, "Host: {}\r\n", host).map_err(|_|{
+        write!(&mut handshake, "Host: {}\r\n", host).map_err(|_| {
             eprintln!("Write host: {host} to handshake failed");
             WsError::ClientHandshakeError
-        })?; // TODO: handle error of write
+        })?;
         handshake.push_str("Upgrade: websocket\r\n");
         handshake.push_str("Connection: Upgrade\r\n");
         handshake.push_str("Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n");
         handshake.push_str("Sec-WebSocket-Version: 13\r\n");
         handshake.push_str("\r\n");
-        self.socket.write(handshake.as_bytes()).map_err(|_|{
-            eprintln!("Write handshake to socket failed");
+        self.socket.write(handshake.as_bytes()).map_err(|_| {
+            eprintln!("Client write handshake to socket failed");
             WsError::ClientHandshakeError
         })?;
         let mut buffer: [u8; 1024] = [0; 1024];
-        let buffer_size = self.socket.read(&mut buffer).map_err(|_|{
+        let buffer_size = self.socket.read(&mut buffer).map_err(|_| {
             eprintln!("Read from socket failed");
             WsError::ClientHandshakeError
         })?;
@@ -147,7 +173,7 @@ impl<S: Read + io::Write> WebSocket<S> {
 
         Ok(frame)
     }
-    pub fn send_message(
+    fn send_message(
         &mut self,
         kind: MessageKind,
         payload: Vec<u8>,
@@ -171,6 +197,12 @@ impl<S: Read + io::Write> WebSocket<S> {
             first = false;
         }
         Ok(())
+    }
+    pub fn send_text(&mut self, text: String) -> Result<()> {
+        self.send_message(MessageKind::TEXT, text.into_bytes(), CHUCK_SIZE)
+    }
+    pub fn send_binary(&mut self, binary: &[u8]) -> Result<()> {
+        self.send_message(MessageKind::BIN, Vec::from(binary), CHUCK_SIZE)
     }
 
     pub fn read_message(&mut self) -> Result<Message> {
