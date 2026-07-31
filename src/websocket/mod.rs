@@ -68,7 +68,8 @@ impl<S: Read + io::Write, const CHUCK_SIZE: usize> WebSocket<S, CHUCK_SIZE> {
             eprintln!("Read from socket failed");
             WsError::ClientHandshakeError
         })?;
-        if buffer_size < 2 || buffer[buffer_size - 2] != b'\r' || buffer[buffer_size - 1] != b'\n' {
+        let data = &buffer[..buffer_size];
+        if buffer_size < 2 || !data.ends_with(b"\r\n") {
             return Err(WsError::ClientHandshakeError);
         }
         Ok(())
@@ -176,7 +177,7 @@ impl<S: Read + io::Write, const CHUCK_SIZE: usize> WebSocket<S, CHUCK_SIZE> {
     fn send_message(
         &mut self,
         kind: MessageKind,
-        payload: Vec<u8>,
+        payload: &[u8],
         chunk_len: usize,
     ) -> Result<()> {
         let mut first = true;
@@ -198,11 +199,11 @@ impl<S: Read + io::Write, const CHUCK_SIZE: usize> WebSocket<S, CHUCK_SIZE> {
         }
         Ok(())
     }
-    pub fn send_text(&mut self, text: String) -> Result<()> {
-        self.send_message(MessageKind::TEXT, text.into_bytes(), CHUCK_SIZE)
+    pub fn send_text(&mut self, text: &str) -> Result<()> {
+        self.send_message(MessageKind::TEXT, text.as_bytes(), CHUCK_SIZE)
     }
     pub fn send_binary(&mut self, binary: &[u8]) -> Result<()> {
-        self.send_message(MessageKind::BIN, Vec::from(binary), CHUCK_SIZE)
+        self.send_message(MessageKind::BIN, binary, CHUCK_SIZE)
     }
 
     pub fn read_message(&mut self) -> Result<Message> {

@@ -21,5 +21,5 @@ pub(crate) fn parse_sec_ws_key(request: &str) -> Result<String> {
             return Ok(String::from(value));
         }
     }
-    return Err(WsError::ServerHandshakeError);
+    Err(WsError::ServerHandshakeError)
 }
