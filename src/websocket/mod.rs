@@ -17,10 +17,10 @@ use std::str;
 pub struct WebSocket<S, const CHUNK_SIZE: usize> {
     socket: S,
 }
-
+// Maybe sending and reading frames shouldn't be public.
 impl<S: Read + io::Write, const CHUCK_SIZE: usize> WebSocket<S, CHUCK_SIZE> {
     pub fn new(socket: S) -> Self {
-        WebSocket { socket }
+        Self { socket }
     }
     pub fn server_handshake(&mut self) -> Result<()> {
         let mut buffer = [0u8; 1024];
@@ -132,7 +132,7 @@ impl<S: Read + io::Write, const CHUCK_SIZE: usize> WebSocket<S, CHUCK_SIZE> {
     pub fn read_frame(&mut self) -> Result<Frame> {
         let mut header = [0u8; 2];
         self.socket.read(&mut header)?;
-        let mut payload_len = 0;
+        let mut payload_len = 0u64;
         {
             let len = header[1] & 0x7F; // TODO: change this into Header struct
             match len {
@@ -140,18 +140,18 @@ impl<S: Read + io::Write, const CHUCK_SIZE: usize> WebSocket<S, CHUCK_SIZE> {
                     let mut ext_len = [0u8; 2];
                     self.socket.read(&mut ext_len)?;
                     for i in 0..ext_len.len() {
-                        payload_len = (payload_len << 8) | ext_len[i];
+                        payload_len = (payload_len << 8) | ext_len[i] as u64;
                     }
                 }
                 127 => {
                     let mut ext_len = [0u8; 8];
                     self.socket.read(&mut ext_len)?;
                     for i in 0..ext_len.len() {
-                        payload_len = (payload_len << 8) | ext_len[i];
+                        payload_len = (payload_len << 8) | ext_len[i] as u64;
                     }
                 }
                 _ => {
-                    payload_len = len;
+                    payload_len = len as u64;
                 }
             }
         }
@@ -174,12 +174,7 @@ impl<S: Read + io::Write, const CHUCK_SIZE: usize> WebSocket<S, CHUCK_SIZE> {
 
         Ok(frame)
     }
-    fn send_message(
-        &mut self,
-        kind: MessageKind,
-        payload: &[u8],
-        chunk_len: usize,
-    ) -> Result<()> {
+    fn send_message(&mut self, kind: MessageKind, payload: &[u8], chunk_len: usize) -> Result<()> {
         let mut first = true;
         let mut i = 0;
         let total_len = payload.len();

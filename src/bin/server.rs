@@ -1,7 +1,7 @@
 use std::net::{TcpListener, TcpStream};
 use rustws::WebSocket;
-const HOST: &str = "127.0.0.1";
-const PORT: u16 = 6969;
+mod config;
+use config::{HOST, PORT};
 fn main() {
     let addr = format!("{}:{}", HOST, PORT);
     let server = TcpListener::bind(addr).unwrap();
