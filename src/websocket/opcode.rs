@@ -10,10 +10,7 @@ pub enum Opcode {
 
 impl Opcode {
     pub fn is_control(&self) -> bool {
-        match self {
-            Opcode::CLOSE | Opcode::PING | Opcode::PONG => true,
-            _ => false,
-        }
+        matches!(self, Opcode::CLOSE | Opcode::PING | Opcode::PONG)
     }
 }
 impl TryFrom<u8> for Opcode {

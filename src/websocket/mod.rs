@@ -80,23 +80,23 @@ impl<S: Read + io::Write, const CHUCK_SIZE: usize> WebSocket<S, CHUCK_SIZE> {
             if fin {
                 data |= 1 << 7;
             }
-            self.socket.write(&[data])?;
+            self.socket.write_all(&[data])?;
         }
         {
             if payload.len() < 126 {
                 let data = (1 << 7) | payload.len() as u8;
-                self.socket.write(&[data])?;
+                self.socket.write_all(&[data])?;
             } else if payload.len() <= u16::MAX as usize {
                 let data = (1 << 7) | 126;
-                self.socket.write(&[data])?;
+                self.socket.write_all(&[data])?;
                 let len: [u8; 2] = [
                     ((payload.len() >> (8 * 1)) & 0xFF) as u8,
                     ((payload.len() >> (8 * 0)) & 0xFF) as u8,
                 ];
-                self.socket.write(&len)?;
+                self.socket.write_all(&len)?;
             } else if payload.len() > u16::MAX as usize {
-                let data = (1 << 7) | 127 as u8;
-                self.socket.write(&[data])?;
+                let data = (1 << 7) | 127u8;
+                self.socket.write_all(&[data])?;
                 let len: [u8; 8] = [
                     ((payload.len() >> (8 * 7)) & 0xFF) as u8,
                     ((payload.len() >> (8 * 6)) & 0xFF) as u8,
@@ -107,12 +107,12 @@ impl<S: Read + io::Write, const CHUCK_SIZE: usize> WebSocket<S, CHUCK_SIZE> {
                     ((payload.len() >> (8 * 1)) & 0xFF) as u8,
                     ((payload.len() >> (8 * 0)) & 0xFF) as u8,
                 ];
-                self.socket.write(&len)?;
+                self.socket.write_all(&len)?;
             }
         }
 
         let mask: [u8; 4] = rand::random();
-        self.socket.write(&mask)?;
+        self.socket.write_all(&mask)?;
         {
             let mut i = 0;
             while i < payload.len() {
@@ -123,7 +123,7 @@ impl<S: Read + io::Write, const CHUCK_SIZE: usize> WebSocket<S, CHUCK_SIZE> {
                     chunk_size += 1;
                     i += 1;
                 }
-                self.socket.write(&chunk[0..chunk_size])?;
+                self.socket.write_all(&chunk[0..chunk_size])?;
             }
         }
         Ok(())
@@ -131,23 +131,23 @@ impl<S: Read + io::Write, const CHUCK_SIZE: usize> WebSocket<S, CHUCK_SIZE> {
 
     pub fn read_frame(&mut self) -> Result<Frame> {
         let mut header = [0u8; 2];
-        self.socket.read(&mut header)?;
+        self.socket.read_exact(&mut header)?;
         let mut payload_len = 0u64;
         {
             let len = header[1] & 0x7F; // TODO: change this into Header struct
             match len {
                 126 => {
                     let mut ext_len = [0u8; 2];
-                    self.socket.read(&mut ext_len)?;
-                    for i in 0..ext_len.len() {
-                        payload_len = (payload_len << 8) | ext_len[i] as u64;
+                    self.socket.read_exact(&mut ext_len)?;
+                    for len in &ext_len {
+                        payload_len = (payload_len << 8) | *len as u64;
                     }
                 }
                 127 => {
                     let mut ext_len = [0u8; 8];
-                    self.socket.read(&mut ext_len)?;
-                    for i in 0..ext_len.len() {
-                        payload_len = (payload_len << 8) | ext_len[i] as u64;
+                    self.socket.read_exact(&mut ext_len)?;
+                    for len in &ext_len {
+                        payload_len = (payload_len << 8) | *len as u64;
                     }
                 }
                 _ => {
@@ -159,7 +159,7 @@ impl<S: Read + io::Write, const CHUCK_SIZE: usize> WebSocket<S, CHUCK_SIZE> {
             let mut mask = [0u8; 4];
             let masked = header[1] >> 7 == 1;
             if masked {
-                self.socket.read(&mut mask)?;
+                self.socket.read_exact(&mut mask)?;
             }
         }
 
@@ -168,8 +168,8 @@ impl<S: Read + io::Write, const CHUCK_SIZE: usize> WebSocket<S, CHUCK_SIZE> {
         frame.opcode = Opcode::try_from(header[0] & 0xF).expect("Invalid opcode");
         frame.payload = vec![0; payload_len as usize];
 
-        if frame.payload.len() > 0 {
-            self.socket.read(&mut frame.payload[..])?;
+        if !frame.payload.is_empty() {
+            self.socket.read_exact(&mut frame.payload[..])?;
         }
 
         Ok(frame)

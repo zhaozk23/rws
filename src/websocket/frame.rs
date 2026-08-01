@@ -13,15 +13,21 @@ impl Frame {
         }
     }
 }
+
+impl Default for Frame {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl std::fmt::Display for Frame {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "opcode: {}", self.opcode)?;
-        write!(f, "payload_len: {}", self.payload.len())?;
-        write!(f, "payload:     ")?;
+        writeln!(f, "opcode: {}", self.opcode)?;
+        writeln!(f, "payload_len: {}", self.payload.len())?;
+        writeln!(f, "payload:     ")?;
         for &p in self.payload.iter() {
             write!(f, "0x{:02X} ", p)?;
         }
-        write!(f, "\n")?;
+        writeln!(f)?;
         Ok(())
     }
 }

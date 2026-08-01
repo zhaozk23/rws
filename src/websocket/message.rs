@@ -37,15 +37,21 @@ impl Message {
     }
 }
 
+impl Default for Message {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl std::fmt::Display for Message {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "message kind: {}", self.kind)?;
-        write!(f, "message length: {}", self.chunks.len())?;
+        writeln!(f, "message kind: {}", self.kind)?;
+        writeln!(f, "message length: {}", self.chunks.len())?;
         for &p in self.chunks.iter() {
             write!(f, "0x{:02X} ", p)?;
         }
-        write!(f, "\n")?;
-        write!(f, "-----------------------------\n")?;
+        writeln!(f)?;
+        writeln!(f, "-----------------------------")?;
         Ok(())
     }
 }
