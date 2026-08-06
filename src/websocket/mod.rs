@@ -11,22 +11,34 @@ use message::{Message, MessageKind};
 use opcode::Opcode;
 use rand;
 use std::fmt::Write;
-use std::io::{self, Read};
+use std::io::{self, BufRead, BufReader, Read};
 use std::str;
 
+use crate::common::parse_sec_ws_accept;
+
 pub struct WebSocket<S, const CHUNK_SIZE: usize> {
-    socket: S,
+    socket: BufReader<S>,
 }
 // Maybe sending and reading frames shouldn't be public.
-impl<S: Read + io::Write, const CHUCK_SIZE: usize> WebSocket<S, CHUCK_SIZE> {
+impl<S: Read + io::Write, const CHUNK_SIZE: usize> WebSocket<S, CHUNK_SIZE> {
     pub fn new(socket: S) -> Self {
-        Self { socket }
+        Self {
+            socket: BufReader::new(socket),
+        }
     }
     pub fn server_handshake(&mut self) -> Result<()> {
-        let mut buffer = [0u8; 1024];
-        let buf_size = self.socket.read(&mut buffer).unwrap(); // TODO: work with server io errors
-        let request = str::from_utf8(&buffer[0..buf_size]).unwrap(); // TODO: handle utf8 errors (it shouldn't happen in handshake)
-        let sec_ws_key = parse_sec_ws_key(request)?;
+        let (sec_ws_key, header_len) = {
+            let buffer = self.socket.fill_buf()?;
+            // let mut buffer = [0u8; 1024];
+            if buffer.is_empty() {
+                return Err(WsError::ServerCloseError);
+            }
+            let mut request = str::from_utf8(buffer).unwrap(); // TODO: handle utf8 errors (it shouldn't happen in handshake)
+            let sec_ws_key = parse_sec_ws_key(&mut request)?;
+            let len = buffer.len() - request.len();
+            (sec_ws_key, len)
+        };
+        self.socket.consume(header_len);
         let mut handshake = String::with_capacity(1024);
         handshake.push_str("HTTP/1.1 101 Switching Protocols\r\n");
         handshake.push_str("Upgrade: websocket\r\n");
@@ -41,13 +53,13 @@ impl<S: Read + io::Write, const CHUCK_SIZE: usize> WebSocket<S, CHUCK_SIZE> {
             WsError::ServerHandshakeError
         })?;
         handshake.push_str("\r\n");
-        self.socket.write(handshake.as_bytes()).map_err(|_| {
+        self.socket.get_mut().write(handshake.as_bytes()).map_err(|_| {
             eprintln!("Server write handshake to socket failed");
             WsError::ServerHandshakeError
         })?;
         Ok(())
     }
-    pub fn client_handshake(&mut self, host: String) -> Result<()> {
+    pub fn client_handshake(&mut self, host: &str) -> Result<()> {
         let mut handshake = String::with_capacity(1024);
         handshake.push_str("GET / HTTP/1.1\r\n");
         write!(&mut handshake, "Host: {}\r\n", host).map_err(|_| {
@@ -59,44 +71,48 @@ impl<S: Read + io::Write, const CHUCK_SIZE: usize> WebSocket<S, CHUCK_SIZE> {
         handshake.push_str("Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n");
         handshake.push_str("Sec-WebSocket-Version: 13\r\n");
         handshake.push_str("\r\n");
-        self.socket.write(handshake.as_bytes()).map_err(|_| {
+        self.socket.get_mut().write(handshake.as_bytes()).map_err(|_| {
             eprintln!("Client write handshake to socket failed");
             WsError::ClientHandshakeError
         })?;
-        let mut buffer: [u8; 1024] = [0; 1024];
-        let buffer_size = self.socket.read(&mut buffer).map_err(|_| {
-            eprintln!("Read from socket failed");
-            WsError::ClientHandshakeError
-        })?;
-        let data = &buffer[..buffer_size];
-        if buffer_size < 2 || !data.ends_with(b"\r\n") {
-            return Err(WsError::ClientHandshakeError);
-        }
+        let (sec_ws_accept, header_len) = {
+            let buffer = self.socket.fill_buf()?;
+            // let mut buffer = [0u8; 1024];
+            if buffer.is_empty() {
+                return Err(WsError::ServerCloseError);
+            }
+            let mut response = str::from_utf8(buffer).unwrap(); // TODO: handle utf8 errors (it shouldn't happen in handshake)
+            let sec_ws_accept = parse_sec_ws_accept(&mut response)?;
+            let len = buffer.len() - response.len();
+            (sec_ws_accept, len)
+        };
+        self.socket.consume(header_len);
         Ok(())
     }
-    pub fn send_frame(&mut self, fin: bool, opcode: Opcode, payload: &[u8]) -> Result<()> {
+    fn send_frame(&mut self, fin: bool, opcode: Opcode, payload: &[u8]) -> Result<()> {
+        let socket = self.socket.get_mut();
         {
             let mut data = opcode as u8;
             if fin {
                 data |= 1 << 7;
             }
-            self.socket.write_all(&[data])?;
+            socket.write_all(&[data])?;
         }
         {
             if payload.len() < 126 {
                 let data = (1 << 7) | payload.len() as u8;
-                self.socket.write_all(&[data])?;
+                socket.write_all(&[data])?;
             } else if payload.len() <= u16::MAX as usize {
                 let data = (1 << 7) | 126;
-                self.socket.write_all(&[data])?;
+                socket.write_all(&[data])?;
                 let len: [u8; 2] = [
                     ((payload.len() >> (8 * 1)) & 0xFF) as u8,
                     ((payload.len() >> (8 * 0)) & 0xFF) as u8,
                 ];
-                self.socket.write_all(&len)?;
+                socket.write_all(&len)?;
             } else if payload.len() > u16::MAX as usize {
                 let data = (1 << 7) | 127u8;
-                self.socket.write_all(&[data])?;
+                socket.write_all(&[data])?;
                 let len: [u8; 8] = [
                     ((payload.len() >> (8 * 7)) & 0xFF) as u8,
                     ((payload.len() >> (8 * 6)) & 0xFF) as u8,
@@ -107,12 +123,12 @@ impl<S: Read + io::Write, const CHUCK_SIZE: usize> WebSocket<S, CHUCK_SIZE> {
                     ((payload.len() >> (8 * 1)) & 0xFF) as u8,
                     ((payload.len() >> (8 * 0)) & 0xFF) as u8,
                 ];
-                self.socket.write_all(&len)?;
+                socket.write_all(&len)?;
             }
         }
 
         let mask: [u8; 4] = rand::random();
-        self.socket.write_all(&mask)?;
+        socket.write_all(&mask)?;
         {
             let mut i = 0;
             while i < payload.len() {
@@ -123,13 +139,13 @@ impl<S: Read + io::Write, const CHUCK_SIZE: usize> WebSocket<S, CHUCK_SIZE> {
                     chunk_size += 1;
                     i += 1;
                 }
-                self.socket.write_all(&chunk[0..chunk_size])?;
+                socket.write_all(&chunk[0..chunk_size])?;
             }
         }
         Ok(())
     }
 
-    pub fn read_frame(&mut self) -> Result<Frame> {
+    fn read_frame(&mut self) -> Result<Frame> {
         let mut header = [0u8; 2];
         self.socket.read_exact(&mut header)?;
         let mut payload_len = 0u64;
@@ -195,13 +211,13 @@ impl<S: Read + io::Write, const CHUCK_SIZE: usize> WebSocket<S, CHUCK_SIZE> {
         Ok(())
     }
     pub fn send_text(&mut self, text: &str) -> Result<()> {
-        self.send_message(MessageKind::TEXT, text.as_bytes(), CHUCK_SIZE)
+        self.send_message(MessageKind::TEXT, text.as_bytes(), CHUNK_SIZE)
     }
     pub fn send_binary(&mut self, binary: &[u8]) -> Result<()> {
-        self.send_message(MessageKind::BIN, binary, CHUCK_SIZE)
+        self.send_message(MessageKind::BIN, binary, CHUNK_SIZE)
     }
 
-    pub fn read_message(&mut self) -> Result<Message> {
+    fn read_message(&mut self) -> Result<Message> {
         let mut message = Message::new();
         loop {
             let frame = self.read_frame()?;
@@ -228,5 +244,8 @@ impl<S: Read + io::Write, const CHUCK_SIZE: usize> WebSocket<S, CHUCK_SIZE> {
             }
         }
         Ok(message)
+    }
+    pub fn read(&mut self) -> Result<Vec<u8>> {
+        self.read_message().map(|message| message.chunks)
     }
 }
