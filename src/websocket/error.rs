@@ -6,6 +6,8 @@ pub enum WsError {
     ClientHandshakeError,
     #[error("client handshake bad response")]
     ClientHandshakeBadResponse,
+    #[error("bad websocket accept")]
+    ClientHandshakeBadAccept,
     #[error("No Websocket Accept found in response")]
     ClientHandshakeNoAccept,
     #[error("Multiple Websocket Accepts found in response")]
@@ -24,6 +26,8 @@ pub enum WsError {
     AllocatorError,
     #[error("server close error")]
     ServerCloseError,
+    #[error("invalid opcode")]
+    InvalidOpcode,
 }
 
 pub type Result<T> = std::result::Result<T, WsError>;

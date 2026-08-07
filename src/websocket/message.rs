@@ -1,17 +1,17 @@
-use crate::websocket::opcode::Opcode;
+use crate::error::WsError;
+use crate::opcode::Opcode;
 #[repr(u8)]
 pub enum MessageKind {
     TEXT = Opcode::TEXT as u8,
     BIN = Opcode::BIN as u8,
 }
-impl From<Opcode> for MessageKind {
-    fn from(value: Opcode) -> Self {
+impl TryFrom<Opcode> for MessageKind {
+    type Error = WsError;
+    fn try_from(value: Opcode) -> Result<Self, Self::Error> {
         match value {
-            Opcode::TEXT => Self::TEXT,
-            Opcode::BIN => Self::BIN,
-            _ => {
-                unreachable!()
-            }
+            Opcode::TEXT => Ok(Self::TEXT),
+            Opcode::BIN => Ok(Self::BIN),
+            _ => Err(WsError::InvalidOpcode),
         }
     }
 }

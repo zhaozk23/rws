@@ -25,7 +25,7 @@ pub(crate) fn parse_sec_ws_key(request: &mut &str) -> Result<String> {
         *request = &request[index + LINE_SEP.len()..];
         let header_parts: Vec<&str> = header.splitn(2, ":").collect();
         if header_parts.len() < 2 {
-            return Err(WsError::ServerHandshakeError);
+            return Err(WsError::ServerHandshakeBadRequest);
         }
         let key = header_parts[0].trim();
         let value = header_parts[1].trim();
