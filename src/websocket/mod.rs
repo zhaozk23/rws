@@ -104,7 +104,7 @@ impl<S: Read + io::Write, const CHUNK_SIZE: usize> WebSocket<S, CHUNK_SIZE> {
                 }
             }
             let mut response =
-                str::from_utf8(&buffer).map_err(|_| WsError::ServerHandshakeBadRequest)?;
+                str::from_utf8(&buffer).map_err(|_| WsError::ClientHandshakeBadResponse)?;
             parse_sec_ws_accept(&mut response)?
         };
         if sec_ws_accept != "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=" {
@@ -112,7 +112,7 @@ impl<S: Read + io::Write, const CHUNK_SIZE: usize> WebSocket<S, CHUNK_SIZE> {
         }
         Ok(())
     }
-    fn send_frame(&mut self, fin: bool, opcode: Opcode, payload: &[u8]) -> Result<()> {
+    pub fn send_frame(&mut self, fin: bool, opcode: Opcode, payload: &[u8]) -> Result<()> {
         let socket = self.socket.get_mut();
         {
             let mut data = opcode as u8;
@@ -209,12 +209,12 @@ impl<S: Read + io::Write, const CHUNK_SIZE: usize> WebSocket<S, CHUNK_SIZE> {
 
         Ok(frame)
     }
-    fn send_message(&mut self, kind: MessageKind, payload: &[u8], chunk_len: usize) -> Result<()> {
+    pub fn send_message(&mut self, kind: MessageKind, payload: &[u8]) -> Result<()> {
         let mut first = true;
         let mut i = 0;
         let total_len = payload.len();
         loop {
-            let len = (total_len - i).min(chunk_len);
+            let len = (total_len - i).min(CHUNK_SIZE);
             let opcode = if first {
                 match kind {
                     MessageKind::BIN => Opcode::BIN,
@@ -226,20 +226,14 @@ impl<S: Read + io::Write, const CHUNK_SIZE: usize> WebSocket<S, CHUNK_SIZE> {
             self.send_frame(i + len == total_len, opcode, &payload[i..i + len])?;
             i += len;
             first = false;
-            if i > total_len {
+            if i >= total_len {
                 break;
             }
         }
         Ok(())
     }
-    pub fn send_text(&mut self, text: &str) -> Result<()> {
-        self.send_message(MessageKind::TEXT, text.as_bytes(), CHUNK_SIZE)
-    }
-    pub fn send_binary(&mut self, binary: &[u8]) -> Result<()> {
-        self.send_message(MessageKind::BIN, binary, CHUNK_SIZE)
-    }
 
-    fn read_message(&mut self) -> Result<Message> {
+    pub fn read_message(&mut self) -> Result<Message> {
         let mut message = Message::new();
         loop {
             let frame = self.read_frame()?;
@@ -256,18 +250,15 @@ impl<S: Read + io::Write, const CHUNK_SIZE: usize> WebSocket<S, CHUNK_SIZE> {
                     }
                 }
             } else {
-                if message.chunks.is_empty() {
+                if message.payload.is_empty() {
                     message.kind = frame.opcode.try_into()?;
                 }
-                message.chunks.extend_from_slice(&frame.payload[..]);
+                message.payload.extend_from_slice(&frame.payload[..]);
                 if frame.fin {
                     break;
                 }
             }
         }
         Ok(message)
-    }
-    pub fn read(&mut self) -> Result<Vec<u8>> {
-        self.read_message().map(|message| message.chunks)
     }
 }

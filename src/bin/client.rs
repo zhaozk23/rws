@@ -8,7 +8,7 @@ fn main() {
     let stream = TcpStream::connect(addr).expect("Couldn't connect to server");
     let mut ws = WebSocket::<TcpStream, CHUNK_SIZE>::new_client(stream);
     ws.client_handshake(HOST).unwrap();
-    let message = ws.read().unwrap();
+    let message = ws.read_message().unwrap().payload;
     let message = String::from_utf8(message).unwrap();
     println!("Message from server: {message}");
 }

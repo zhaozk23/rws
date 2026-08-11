@@ -1,4 +1,4 @@
-use crate::websocket::opcode::Opcode;
+use crate::opcode::Opcode;
 pub struct Frame {
     pub(crate) fin: bool,
     pub(crate) opcode: Opcode,

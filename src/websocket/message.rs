@@ -23,16 +23,16 @@ impl std::fmt::Display for MessageKind {
         }
     }
 }
-// type MessageChunk = Vec<u8>;
+
 pub struct Message {
     pub kind: MessageKind,
-    pub chunks: Vec<u8>,
+    pub payload: Vec<u8>,
 }
 impl Message {
     pub fn new() -> Self {
         Message {
             kind: MessageKind::TEXT,
-            chunks: Vec::new(),
+            payload: Vec::new(),
         }
     }
 }
@@ -46,8 +46,8 @@ impl Default for Message {
 impl std::fmt::Display for Message {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "message kind: {}", self.kind)?;
-        writeln!(f, "message length: {}", self.chunks.len())?;
-        for &p in self.chunks.iter() {
+        writeln!(f, "message length: {}", self.payload.len())?;
+        for &p in self.payload.iter() {
             write!(f, "0x{:02X} ", p)?;
         }
         writeln!(f)?;
