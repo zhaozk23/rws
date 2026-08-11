@@ -22,12 +22,18 @@ pub enum WsError {
     ServerHandshakeMultipleKeys,
     #[error("socket error")]
     SocketError(#[from] io::Error),
-    #[error("allocator error")]
-    AllocatorError,
-    #[error("server close error")]
-    ServerCloseError,
     #[error("invalid opcode")]
     InvalidOpcode,
+    #[error("unexpected opcode")]
+    UnexpectedOpcode,
+    #[error("wrong reserved bits")]
+    ReservedBitsNotNegotiated,
+    #[error("control frame too big")]
+    ControlFrameTooBig,
+    #[error("invalid utf8")]
+    InvalidUtf8,
+    #[error("close frame sent")]
+    CloseFrameSent,
 }
 
 pub type Result<T> = std::result::Result<T, WsError>;

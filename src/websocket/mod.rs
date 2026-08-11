@@ -4,7 +4,7 @@ pub mod frame;
 pub mod message;
 pub mod opcode;
 
-use common::{compute_sec_websocket_accept, parse_sec_ws_accept, parse_sec_ws_key};
+use common::{compute_sec_websocket_accept, parse_sec_ws_accept, parse_sec_ws_key, verify_utf8};
 use error::{Result, WsError};
 use frame::Frame;
 use message::{Message, MessageKind};
@@ -113,6 +113,9 @@ impl<S: Read + io::Write, const CHUNK_SIZE: usize> WebSocket<S, CHUNK_SIZE> {
         Ok(())
     }
     pub fn send_frame(&mut self, fin: bool, opcode: Opcode, payload: &[u8]) -> Result<()> {
+        if opcode.is_control() && (payload.len() > 125 || !fin) {
+            return Err(WsError::ControlFrameTooBig);
+        }
         let socket = self.socket.get_mut();
         {
             let mut data = opcode as u8;
@@ -195,9 +198,17 @@ impl<S: Read + io::Write, const CHUNK_SIZE: usize> WebSocket<S, CHUNK_SIZE> {
 
         let mut frame = Frame::new();
         frame.fin = header[0] >> 7 == 1;
+        frame.rsv1 = header[0] >> 6 == 1;
+        frame.rsv2 = header[0] >> 5 == 1;
+        frame.rsv3 = header[0] >> 4 == 1;
         frame.opcode = Opcode::try_from(header[0] & 0xF).map_err(|_| WsError::InvalidOpcode)?;
         frame.payload = vec![0; payload_len as usize];
-
+        if frame.opcode.is_control() && (payload_len > 125 || !frame.fin) {
+            return Err(WsError::ControlFrameTooBig);
+        }
+        if frame.rsv1 || frame.rsv2 || frame.rsv3 {
+            return Err(WsError::ReservedBitsNotNegotiated);
+        }
         if !frame.payload.is_empty() {
             self.socket.read_exact(&mut frame.payload[..])?;
             if masked {
@@ -235,12 +246,14 @@ impl<S: Read + io::Write, const CHUNK_SIZE: usize> WebSocket<S, CHUNK_SIZE> {
 
     pub fn read_message(&mut self) -> Result<Message> {
         let mut message = Message::new();
+        let mut cont = false;
+        let mut verify_pos = 0;
         loop {
             let frame = self.read_frame()?;
             if frame.opcode.is_control() {
                 match frame.opcode {
                     Opcode::CLOSE => {
-                        return Err(WsError::ServerCloseError);
+                        return Err(WsError::CloseFrameSent);
                     }
                     Opcode::PING => {
                         self.send_frame(true, Opcode::PONG, &frame.payload[..])?;
@@ -250,10 +263,27 @@ impl<S: Read + io::Write, const CHUNK_SIZE: usize> WebSocket<S, CHUNK_SIZE> {
                     }
                 }
             } else {
-                if message.payload.is_empty() {
+                if !cont {
                     message.kind = frame.opcode.try_into()?;
+                    cont = true;
+                } else if frame.opcode != Opcode::CONT {
+                    return Err(WsError::UnexpectedOpcode);
                 }
                 message.payload.extend_from_slice(&frame.payload[..]);
+                if message.kind == MessageKind::TEXT {
+                    while verify_pos < message.payload.len() {
+                        match verify_utf8(&message.payload, verify_pos) {
+                            Ok(Some(n)) => verify_pos += n,
+                            Ok(None) => {
+                                if frame.fin {
+                                    return Err(WsError::InvalidUtf8);
+                                }
+                                break;
+                            },
+                            Err(e) => return Err(e),
+                        }
+                    }
+                }
                 if frame.fin {
                     break;
                 }

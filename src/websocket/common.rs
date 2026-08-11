@@ -87,3 +87,54 @@ pub(crate) fn parse_sec_ws_accept(response: &mut &str) -> Result<String> {
     }
     Ok(ws_accept)
 }
+
+pub(crate) fn verify_utf8(buf: &[u8], pos: usize) -> Result<Option<usize>> {
+    let rem = match buf.get(pos..) {
+        Some(r) if !r.is_empty() => r,
+        _ => return Ok(None),
+    };
+    let b0 = rem[0];
+    let min_len = if b0 < 0x80 {
+        // 1字节:成功
+        return Ok(Some(1));
+    } else if b0 & 0xE0 == 0xC0 {
+        // 110xxxxx => 2字节
+        2
+    } else if b0 & 0xF0 == 0xE0 {
+        // 1110xxxx => 3字节
+        3
+    } else if b0 & 0xF8 == 0xF0 {
+        // 11110xxx => 4字节
+        4
+    } else {
+        // 10xxxxxx(孤立续字节)或非法 => 错
+        return Err(WsError::InvalidUtf8);
+    };
+    if rem.len() < min_len {
+        return Ok(None);
+    };
+    let mut cp = (b0
+        & match min_len {
+            2 => 0x1F,
+            3 => 0x0F,
+            _ => 0x07,
+        }) as u32;
+    for &c in rem.iter().take(min_len).skip(1) {
+        if c & 0xC0 != 0x80 {
+            return Err(WsError::InvalidUtf8);
+        }
+        cp = (cp << 6) | (c & 0x3F) as u32;
+    }
+    if cp
+        < match min_len {
+            2 => 0x80,
+            3 => 0x800,
+            _ => 0x10000,
+        }
+        || (0xD800..=0xDFFF).contains(&cp)
+        || cp > 0x10FFFF
+    {
+        return Err(WsError::InvalidUtf8);
+    }
+    Ok(Some(min_len))
+}

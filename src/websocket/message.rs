@@ -1,6 +1,7 @@
 use crate::error::WsError;
 use crate::opcode::Opcode;
 #[repr(u8)]
+#[derive(PartialEq)]
 pub enum MessageKind {
     TEXT = Opcode::TEXT as u8,
     BIN = Opcode::BIN as u8,

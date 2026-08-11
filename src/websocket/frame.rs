@@ -1,6 +1,9 @@
 use crate::opcode::Opcode;
 pub struct Frame {
     pub(crate) fin: bool,
+    pub(crate) rsv1: bool,
+    pub(crate) rsv2: bool,
+    pub(crate) rsv3: bool,
     pub(crate) opcode: Opcode,
     pub(crate) payload: Vec<u8>,
 }
@@ -8,6 +11,9 @@ impl Frame {
     pub fn new() -> Self {
         Frame {
             fin: false,
+            rsv1: false,
+            rsv2: false,
+            rsv3: false,
             opcode: Opcode::CONT,
             payload: Vec::new(),
         }

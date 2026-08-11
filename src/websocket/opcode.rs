@@ -1,4 +1,5 @@
 #[repr(u8)]
+#[derive(PartialEq)]
 pub enum Opcode {
     CONT = 0x0,
     TEXT = 0x1,
