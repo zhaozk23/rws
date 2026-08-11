@@ -8,7 +8,7 @@ fn main() {
     println!("Listening to {}:{}", HOST, PORT);
     for stream in server.incoming() {
         let client = stream.unwrap();
-        let mut ws = WebSocket::<TcpStream, CHUNK_SIZE>::new(client);
+        let mut ws = WebSocket::<TcpStream, CHUNK_SIZE>::new_server(client);
         if let Err(e) = ws.server_handshake() {
             println!("ERROR: handshake failes: {e}");
             continue;

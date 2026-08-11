@@ -16,12 +16,20 @@ use std::str;
 
 pub struct WebSocket<S, const CHUNK_SIZE: usize> {
     socket: BufReader<S>,
+    is_client: bool,
 }
 
 impl<S: Read + io::Write, const CHUNK_SIZE: usize> WebSocket<S, CHUNK_SIZE> {
-    pub fn new(socket: S) -> Self {
+    pub fn new_server(socket: S) -> Self {
         Self {
             socket: BufReader::new(socket),
+            is_client: false,
+        }
+    }
+    pub fn new_client(socket: S) -> Self {
+        Self {
+            socket: BufReader::new(socket),
+            is_client: true,
         }
     }
     pub fn server_handshake(&mut self) -> Result<()> {
@@ -114,36 +122,40 @@ impl<S: Read + io::Write, const CHUNK_SIZE: usize> WebSocket<S, CHUNK_SIZE> {
             socket.write_all(&[data])?;
         }
         {
+            let mask_bit: u8 = if self.is_client { 1 << 7 } else { 0 };
             if payload.len() < 126 {
-                let data = (1 << 7) | payload.len() as u8;
+                let data = mask_bit | payload.len() as u8;
                 socket.write_all(&[data])?;
             } else if payload.len() <= u16::MAX as usize {
-                let data = (1 << 7) | 126;
+                let data = mask_bit | 126;
                 socket.write_all(&[data])?;
                 let len = (payload.len() as u16).to_be_bytes();
                 socket.write_all(&len)?;
             } else if payload.len() > u16::MAX as usize {
-                let data = (1 << 7) | 127u8;
+                let data = mask_bit | 127u8;
                 socket.write_all(&[data])?;
                 let len = payload.len().to_be_bytes();
                 socket.write_all(&len)?;
             }
         }
-
-        let mask: [u8; 4] = rand::random();
-        socket.write_all(&mask)?;
-        {
-            let mut i = 0;
-            while i < payload.len() {
-                let mut chunk = [0u8; 1024];
-                let mut chunk_size = 0;
-                while i < payload.len() && chunk_size < chunk.len() {
-                    chunk[chunk_size] = payload[i] ^ mask[i % 4];
-                    chunk_size += 1;
-                    i += 1;
+        if self.is_client {
+            let mask: [u8; 4] = rand::random();
+            socket.write_all(&mask)?;
+            {
+                let mut i = 0;
+                while i < payload.len() {
+                    let mut chunk = [0u8; 1024];
+                    let mut chunk_size = 0;
+                    while i < payload.len() && chunk_size < chunk.len() {
+                        chunk[chunk_size] = payload[i] ^ mask[i % 4];
+                        chunk_size += 1;
+                        i += 1;
+                    }
+                    socket.write_all(&chunk[0..chunk_size])?;
                 }
-                socket.write_all(&chunk[0..chunk_size])?;
             }
+        } else {
+            socket.write_all(payload)?;
         }
         Ok(())
     }
@@ -201,7 +213,7 @@ impl<S: Read + io::Write, const CHUNK_SIZE: usize> WebSocket<S, CHUNK_SIZE> {
         let mut first = true;
         let mut i = 0;
         let total_len = payload.len();
-        while i < total_len {
+        loop {
             let len = (total_len - i).min(chunk_len);
             let opcode = if first {
                 match kind {
@@ -214,6 +226,9 @@ impl<S: Read + io::Write, const CHUNK_SIZE: usize> WebSocket<S, CHUNK_SIZE> {
             self.send_frame(i + len == total_len, opcode, &payload[i..i + len])?;
             i += len;
             first = false;
+            if i > total_len {
+                break;
+            }
         }
         Ok(())
     }
