@@ -243,7 +243,12 @@ impl<S: Read + io::Write, const CHUNK_SIZE: usize> WebSocket<S, CHUNK_SIZE> {
         }
         Ok(())
     }
-
+    pub fn send_text(&mut self, payload: &str) -> Result<()> {
+        self.send_message(MessageKind::TEXT, payload.as_bytes())
+    }
+    pub fn send_binary(&mut self, payload: &[u8]) -> Result<()> {
+        self.send_message(MessageKind::BIN, payload)
+    }
     pub fn read_message(&mut self) -> Result<Message> {
         let mut message = Message::new();
         let mut cont = false;
