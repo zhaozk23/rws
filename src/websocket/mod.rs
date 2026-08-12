@@ -4,9 +4,11 @@ pub mod frame;
 pub mod message;
 pub mod opcode;
 
-use common::{compute_sec_websocket_accept, parse_sec_ws_accept, parse_sec_ws_key, verify_utf8};
+use common::{
+    compute_sec_websocket_accept, extend_utf8, parse_sec_ws_accept, parse_sec_ws_key, verify_utf8,
+};
 use error::{Result, WsError};
-use frame::Frame;
+use frame::FrameHeader;
 use message::{Message, MessageKind};
 use opcode::Opcode;
 use rand;
@@ -163,63 +165,82 @@ impl<S: Read + io::Write, const CHUNK_SIZE: usize> WebSocket<S, CHUNK_SIZE> {
         Ok(())
     }
 
-    fn read_frame(&mut self) -> Result<Frame> {
+    fn read_frame_header(&mut self) -> Result<FrameHeader> {
         let mut header = [0u8; 2];
         self.socket.read_exact(&mut header)?;
-        let mut payload_len = 0u64;
+        let mut frame_header = FrameHeader::new();
+        frame_header.fin = (header[0] >> 7) & 1 == 1;
+        frame_header.rsv1 = (header[0] >> 6) & 1 == 1;
+        frame_header.rsv2 = (header[0] >> 5) & 1 == 1;
+        frame_header.rsv3 = (header[0] >> 4) & 1 == 1;
+        frame_header.opcode =
+            Opcode::try_from(header[0] & 0xF).map_err(|_| WsError::InvalidOpcode)?;
+        frame_header.masked = (header[1] >> 7) & 1 == 1;
+
         {
-            let len = header[1] & 0x7F; // TODO: change this into Header struct
+            let len = header[1] & 0x7F;
             match len {
                 126 => {
                     let mut ext_len = [0u8; 2];
                     self.socket.read_exact(&mut ext_len)?;
-                    for len in &ext_len {
-                        payload_len = (payload_len << 8) | *len as u64;
-                    }
+                    frame_header.payload_len = u16::from_be_bytes(ext_len) as usize;
                 }
                 127 => {
                     let mut ext_len = [0u8; 8];
                     self.socket.read_exact(&mut ext_len)?;
-                    for len in &ext_len {
-                        payload_len = (payload_len << 8) | *len as u64;
-                    }
+                    frame_header.payload_len = u64::from_be_bytes(ext_len) as usize;
                 }
                 _ => {
-                    payload_len = len as u64;
+                    frame_header.payload_len = len as usize;
                 }
             }
         }
-
-        let mut mask = [0u8; 4];
-        let masked = header[1] >> 7 == 1;
-        if masked {
-            self.socket.read_exact(&mut mask)?;
-        }
-
-        let mut frame = Frame::new();
-        frame.fin = header[0] >> 7 == 1;
-        frame.rsv1 = header[0] >> 6 == 1;
-        frame.rsv2 = header[0] >> 5 == 1;
-        frame.rsv3 = header[0] >> 4 == 1;
-        frame.opcode = Opcode::try_from(header[0] & 0xF).map_err(|_| WsError::InvalidOpcode)?;
-        frame.payload = vec![0; payload_len as usize];
-        if frame.opcode.is_control() && (payload_len > 125 || !frame.fin) {
+        if frame_header.opcode.is_control() && (frame_header.payload_len > 125 || !frame_header.fin)
+        {
             return Err(WsError::ControlFrameTooBig);
         }
-        if frame.rsv1 || frame.rsv2 || frame.rsv3 {
+
+        if frame_header.rsv1 || frame_header.rsv2 || frame_header.rsv3 {
             return Err(WsError::ReservedBitsNotNegotiated);
         }
-        if !frame.payload.is_empty() {
-            self.socket.read_exact(&mut frame.payload[..])?;
-            if masked {
-                for (i, x) in frame.payload.iter_mut().enumerate() {
-                    *x ^= mask[i % 4];
-                }
-            }
+
+        if frame_header.masked {
+            self.socket.read_exact(&mut frame_header.mask)?;
         }
 
-        Ok(frame)
+        Ok(frame_header)
     }
+
+    fn read_frame_payload(&mut self, frame_header: &FrameHeader) -> Result<Vec<u8>> {
+        let mut payload = vec![0; frame_header.payload_len];
+        let mut payload_size = 0;
+        while payload_size < payload.len() {
+            payload_size +=
+                self.read_frame_payload_chunk(frame_header, &mut payload, payload_size)?;
+        }
+        Ok(payload)
+    }
+
+    fn read_frame_payload_chunk(
+        &mut self,
+        frame_header: &FrameHeader,
+        buf: &mut [u8],
+        payload_size: usize,
+    ) -> Result<usize> {
+        assert_eq!(buf.len(), frame_header.payload_len);
+        if payload_size >= frame_header.payload_len {
+            return Ok(0);
+        }
+        let start = payload_size;
+        let n = self.socket.read(&mut buf[start..])?;
+        if frame_header.masked {
+            for i in 0..n {
+                buf[start + i] ^= frame_header.mask[(start + i) % 4];
+            }
+        }
+        Ok(n)
+    }
+
     pub fn send_message(&mut self, kind: MessageKind, payload: &[u8]) -> Result<()> {
         let mut first = true;
         let mut i = 0;
@@ -254,42 +275,60 @@ impl<S: Read + io::Write, const CHUNK_SIZE: usize> WebSocket<S, CHUNK_SIZE> {
         let mut cont = false;
         let mut verify_pos = 0;
         loop {
-            let frame = self.read_frame()?;
-            if frame.opcode.is_control() {
-                match frame.opcode {
+            let frame_header = self.read_frame_header()?;
+            if frame_header.opcode.is_control() {
+                match frame_header.opcode {
                     Opcode::CLOSE => {
                         return Err(WsError::CloseFrameSent);
                     }
                     Opcode::PING => {
-                        self.send_frame(true, Opcode::PONG, &frame.payload[..])?;
+                        let ping_payload = self.read_frame_payload(&frame_header)?;
+                        self.send_frame(true, Opcode::PONG, &ping_payload)?;
                     }
                     _ => {
-                        // Continue
+                        let _ = self.read_frame_payload(&frame_header)?;
                     }
                 }
             } else {
                 if !cont {
-                    message.kind = frame.opcode.try_into()?;
+                    message.kind = frame_header.opcode.try_into()?;
                     cont = true;
-                } else if frame.opcode != Opcode::CONT {
+                } else if frame_header.opcode != Opcode::CONT {
                     return Err(WsError::UnexpectedOpcode);
                 }
-                message.payload.extend_from_slice(&frame.payload[..]);
-                if message.kind == MessageKind::TEXT {
-                    while verify_pos < message.payload.len() {
-                        match verify_utf8(&message.payload, verify_pos) {
-                            Ok(Some(n)) => verify_pos += n,
-                            Ok(None) => {
-                                if frame.fin {
-                                    return Err(WsError::InvalidUtf8);
+                let mut frame_payload = vec![0; frame_header.payload_len];
+                let mut frame_payload_size = 0;
+                while frame_payload_size < frame_payload.len() {
+                    let n = self.read_frame_payload_chunk(
+                        &frame_header,
+                        &mut frame_payload,
+                        frame_payload_size,
+                    )?;
+                    message.payload.extend_from_slice(
+                        &frame_payload[frame_payload_size..frame_payload_size + n],
+                    );
+                    frame_payload_size += n;
+
+                    if message.kind == MessageKind::TEXT {
+                        while verify_pos < message.payload.len() {
+                            match verify_utf8(&message.payload, verify_pos) {
+                                Ok(Some(n)) => verify_pos += n,
+                                Ok(None) => {
+                                    if frame_header.fin {
+                                        return Err(WsError::InvalidUtf8);
+                                    }
+                                    let saved_len = message.payload.len();
+                                    extend_utf8(&mut message.payload, verify_pos);
+                                    verify_utf8(&message.payload, verify_pos)?;
+                                    message.payload.truncate(saved_len);
+                                    break;
                                 }
-                                break;
-                            },
-                            Err(e) => return Err(e),
+                                Err(e) => return Err(e),
+                            }
                         }
                     }
                 }
-                if frame.fin {
+                if frame_header.fin {
                     break;
                 }
             }

@@ -138,3 +138,19 @@ pub(crate) fn verify_utf8(buf: &[u8], pos: usize) -> Result<Option<usize>> {
     }
     Ok(Some(min_len))
 }
+
+pub(crate) fn extend_utf8(buf: &mut Vec<u8>, pos: usize) {
+    let c = buf[pos];
+    let size = if c & 0x80 == 0 {
+        1
+    } else if c & 0xE0 == 0xC0 {
+        2
+    } else if c & 0xF0 == 0xE0 {
+        3
+    } else {
+        4
+    };
+    while buf.len() - pos < size {
+        buf.push(0b1000_0000);
+    }
+}
